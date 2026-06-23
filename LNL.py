@@ -14,6 +14,40 @@ from timm.models.registry import register_model
 from models.localvit import LocalityFeedForward
 from models.tnt import Attention, TNT
 import math
+import torch.hub as hub
+
+
+# URL weight ImageNet cua TNT goc (chi co ban Small la cong khai)
+_TNT_URLS = {
+    'LNL_Ti': '',
+    'LNL_S': 'https://github.com/contrastive/pytorch-image-models/releases/download/TNT/tnt_s_patch16_224.pth.tar',
+}
+
+
+def _load_tnt_pretrained(model, url):
+    """Nap weight TNT ImageNet vao LNL (partial, SHAPE-SAFE).
+    Bo qua: head ImageNet, key khong ton tai, va key trung ten nhung LECH SHAPE
+    (load_state_dict strict=False van raise RuntimeError neu lech shape -> phai loc tay).
+    - conv (locality FFN) la lop moi -> khong co trong checkpoint
+    - outer-MLP cua TNT goc -> LNL khong dung
+    """
+    sd = hub.load_state_dict_from_url(url, map_location='cpu', progress=True)
+    sd = sd.get('state_dict', sd)
+    model_sd = model.state_dict()
+    take, skip_shape = {}, 0
+    for k, v in sd.items():
+        if k.startswith('head.'):
+            continue
+        if k in model_sd:
+            if model_sd[k].shape == v.shape:
+                take[k] = v
+            else:
+                skip_shape += 1
+    msg = model.load_state_dict(take, strict=False)
+    total = len(model_sd)
+    print(f'[LNL] pretrained: loaded {len(take)}/{total} keys | '
+          f'{len(msg.missing_keys)} new/not-loaded | {skip_shape} skipped(shape mismatch)')
+    return model
 
 
 def _cfg(url='', **kwargs):
@@ -121,8 +155,10 @@ def LNL_Ti(pretrained=False, **kwargs):
                          qkv_bias=False, **kwargs)
     model.default_cfg = default_cfgs['tnt_t_conv_patch16_224']
     if pretrained:
-        load_pretrained(
-            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3))
+        if _TNT_URLS['LNL_Ti']:
+            _load_tnt_pretrained(model, _TNT_URLS['LNL_Ti'])
+        else:
+            print('[LNL] khong co pretrained TNT-tiny cong khai -> train from scratch')
     return model
 
 
@@ -132,6 +168,5 @@ def LNL_S(pretrained=False, **kwargs):
                          qkv_bias=False, **kwargs)
     model.default_cfg = default_cfgs['tnt_s_conv_patch16_224']
     if pretrained:
-        load_pretrained(
-            model, num_classes=model.num_classes, in_chans=kwargs.get('in_chans', 3))
-    return 
+        _load_tnt_pretrained(model, _TNT_URLS['LNL_S'])
+    return model
